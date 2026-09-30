@@ -431,8 +431,9 @@ func transactions() {
 
   db.runTransaction({ transaction, errorPointer -> Any? in
     do {
-      let balanceA = try transaction.getDocument(accA)["balance"] as! Double
-      let balanceB = try transaction.getDocument(accB)["balance"] as! Double
+      let snapshots = try transaction.getDocuments([accA, accB])
+      let balanceA = snapshots[0]["balance"] as! Double
+      let balanceB = snapshots[1]["balance"] as! Double
 
       if balanceA < amount {
         errorPointer?.pointee = NSError(domain: "Foo", code: 123, userInfo: nil)

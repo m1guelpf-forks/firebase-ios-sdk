@@ -125,6 +125,20 @@ NS_SWIFT_NAME(Transaction)
                                         error:(NSError *__autoreleasing *)error
     NS_SWIFT_NAME(getDocument(_:));
 
+/**
+ * Reads the supplied documents in one request. All reads must occur before any writes.
+ *
+ * @param documents References from the same Firestore instance as this transaction.
+ * @param error An out parameter for a read error.
+ * @return Snapshots in the same order as `documents`, or nil on error. Missing documents have
+ * `exists` set to false. Repeated references produce repeated snapshots. An empty input returns
+ * an empty array without a request.
+ */
+- (NSArray<FIRDocumentSnapshot *> *_Nullable)getDocuments:
+                                                 (NSArray<FIRDocumentReference *> *)documents
+                                                    error:(NSError *__autoreleasing *)error
+    NS_SWIFT_NAME(getDocuments(_:));
+
 @end
 
 NS_ASSUME_NONNULL_END

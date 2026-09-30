@@ -20,7 +20,8 @@ import PackageDescription
 
 let firebaseVersion = "12.19.2"
 
-let shouldUseSourceFirestore = Context.environment["FIREBASE_SOURCE_FIRESTORE"] != nil
+// Build Firestore from source to include the batch transaction read method.
+let shouldUseSourceFirestore = true
 
 let package = Package(
   name: "Firebase",

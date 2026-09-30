@@ -330,6 +330,71 @@ typedef NS_ENUM(NSUInteger, FIRFromDocumentType) {
 @end
 
 @implementation FSTTransactionTests
+
+- (void)testBatchReadsPreserveOrderMissingDocumentsAndRepeatedReferences {
+  FIRFirestore *firestore = [self firestore];
+  FIRDocumentReference *first = [[firestore collectionWithPath:@"batchReads"] documentWithAutoID];
+  FIRDocumentReference *second = [[firestore collectionWithPath:@"batchReads"] documentWithAutoID];
+  FIRDocumentReference *missing = [[firestore collectionWithPath:@"batchReads"] documentWithAutoID];
+  [self writeDocumentRef:first data:@{@"value" : @1}];
+  [self writeDocumentRef:second data:@{@"value" : @2}];
+
+  XCTestExpectation *done = [self expectationWithDescription:@"batch read"];
+  [firestore
+      runTransactionWithBlock:^id(FIRTransaction *transaction, NSError **error) {
+        NSArray<FIRDocumentSnapshot *> *snapshots =
+            [transaction getDocuments:@[ second, missing, first, second ] error:error];
+        XCTAssertNil(*error);
+        XCTAssertEqual(snapshots.count, 4);
+        XCTAssertEqualObjects(snapshots[0].reference, second);
+        XCTAssertEqualObjects(snapshots[0][@"value"], @2);
+        XCTAssertEqualObjects(snapshots[1].reference, missing);
+        XCTAssertFalse(snapshots[1].exists);
+        XCTAssertEqualObjects(snapshots[2].reference, first);
+        XCTAssertEqualObjects(snapshots[2][@"value"], @1);
+        XCTAssertEqualObjects(snapshots[3], snapshots[0]);
+        return nil;
+      }
+      completion:^(id, NSError *error) {
+        XCTAssertNil(error);
+        [done fulfill];
+      }];
+  [self awaitExpectations];
+}
+
+- (void)testBatchReadWithEmptyInput {
+  XCTestExpectation *done = [self expectationWithDescription:@"empty batch read"];
+  [[self firestore]
+      runTransactionWithBlock:^id(FIRTransaction *transaction, NSError **error) {
+        XCTAssertEqualObjects([transaction getDocuments:@[] error:error], @[]);
+        XCTAssertNil(*error);
+        return nil;
+      }
+      completion:^(id, NSError *error) {
+        XCTAssertNil(error);
+        [done fulfill];
+      }];
+  [self awaitExpectations];
+}
+
+- (void)testBatchReadAfterWriteFails {
+  FIRFirestore *firestore = [self firestore];
+  FIRDocumentReference *document =
+      [[firestore collectionWithPath:@"batchReads"] documentWithAutoID];
+  XCTestExpectation *done = [self expectationWithDescription:@"batch read after write"];
+  [firestore
+      runTransactionWithBlock:^id(FIRTransaction *transaction, NSError **error) {
+        [transaction setData:@{@"value" : @1} forDocument:document];
+        XCTAssertNil([transaction getDocuments:@[ document ] error:error]);
+        XCTAssertEqual((*error).code, FIRFirestoreErrorCodeInvalidArgument);
+        return nil;
+      }
+      completion:^(id, NSError *error) {
+        XCTAssertEqual(error.code, FIRFirestoreErrorCodeInvalidArgument);
+        [done fulfill];
+      }];
+  [self awaitExpectations];
+}
 - (void)testRunsTransactionsAfterGettingExistingDoc {
   FIRFirestore *firestore = [self firestore];
   FSTTransactionTester *tt = [[FSTTransactionTester alloc] initWithDb:firestore testCase:self];
@@ -588,8 +653,8 @@ typedef NS_ENUM(NSUInteger, FIRFromDocumentType) {
   [firestore
       runTransactionWithBlock:^id _Nullable(FIRTransaction *transaction, NSError **error) {
         ++(*counter);
-        // Get the first doc.
-        [transaction getDocument:doc1 error:error];
+        // Read both documents.
+        [transaction getDocuments:@[ doc1, doc2 ] error:error];
         XCTAssertNil(*error);
         // Do a write outside of the transaction. The first time the
         // transaction is tried, this will bump the version, which

@@ -17,6 +17,7 @@
 #import "FIRTransaction.h"
 
 #include <memory>
+#include <set>
 #include <utility>
 #include <vector>
 
@@ -39,6 +40,7 @@ using firebase::firestore::core::ParsedSetData;
 using firebase::firestore::core::ParsedUpdateData;
 using firebase::firestore::core::Transaction;
 using firebase::firestore::model::Document;
+using firebase::firestore::model::DocumentKey;
 using firebase::firestore::util::MakeNSError;
 using firebase::firestore::util::StatusOr;
 using firebase::firestore::util::ThrowInvalidArgument;
@@ -119,53 +121,84 @@ NS_ASSUME_NONNULL_BEGIN
 - (void)getDocument:(FIRDocumentReference *)document
          completion:(void (^)(FIRDocumentSnapshot *_Nullable document,
                               NSError *_Nullable error))completion {
-  [self validateReference:document];
+  [self getDocuments:@[ document ]
+          completion:^(NSArray<FIRDocumentSnapshot *> *_Nullable snapshots,
+                       NSError *_Nullable error) {
+            completion(snapshots.firstObject, error);
+          }];
+}
+
+- (void)getDocuments:(NSArray<FIRDocumentReference *> *)documents
+          completion:(void (^)(NSArray<FIRDocumentSnapshot *> *_Nullable snapshots,
+                               NSError *_Nullable error))completion {
+  documents = [documents copy];
+  std::vector<DocumentKey> keys;
+  std::set<DocumentKey> seen;
+  for (FIRDocumentReference *document in documents) {
+    [self validateReference:document];
+    if (seen.insert(document.key).second) {
+      keys.push_back(document.key);
+    }
+  }
+  if (keys.empty()) {
+    completion(@[], nil);
+    return;
+  }
   _internalTransaction->Lookup(
-      {document.key},
-      [self, document, completion](const StatusOr<std::vector<Document>> &maybe_documents) {
+      keys, [self, documents, completion](const StatusOr<std::vector<Document>> &maybe_documents) {
         if (!maybe_documents.ok()) {
           completion(nil, MakeNSError(maybe_documents.status()));
           return;
         }
 
-        const auto &documents = maybe_documents.ValueOrDie();
-        HARD_ASSERT(documents.size() == 1, "Mismatch in docs returned from document lookup.");
-        const Document &internalDoc = documents.front();
-        if (internalDoc->is_found_document()) {
-          FIRDocumentSnapshot *doc =
+        NSMutableDictionary<NSString *, FIRDocumentSnapshot *> *byPath =
+            [NSMutableDictionary dictionary];
+        for (const Document &internalDoc : maybe_documents.ValueOrDie()) {
+          absl::optional<Document> snapshotDocument;
+          if (internalDoc->is_found_document()) {
+            snapshotDocument = internalDoc;
+          } else {
+            HARD_ASSERT(internalDoc->is_no_document(),
+                        "BatchGetDocumentsRequest returned unexpected document type: %s",
+                        internalDoc.ToString());
+          }
+          FIRDocumentSnapshot *snapshot =
               [[FIRDocumentSnapshot alloc] initWithFirestore:self.firestore
                                                  documentKey:internalDoc->key()
-                                                    document:internalDoc
+                                                    document:snapshotDocument
                                                    fromCache:false
                                             hasPendingWrites:false];
-          completion(doc, nil);
-        } else if (internalDoc->is_no_document()) {
-          FIRDocumentSnapshot *doc = [[FIRDocumentSnapshot alloc] initWithFirestore:self.firestore
-                                                                        documentKey:document.key
-                                                                           document:absl::nullopt
-                                                                          fromCache:false
-                                                                   hasPendingWrites:false];
-          completion(doc, nil);
-        } else {
-          HARD_FAIL("BatchGetDocumentsRequest returned unexpected document type: %s",
-                    internalDoc.ToString());
+          byPath[snapshot.reference.path] = snapshot;
         }
+        NSMutableArray<FIRDocumentSnapshot *> *snapshots =
+            [NSMutableArray arrayWithCapacity:documents.count];
+        for (FIRDocumentReference *document in documents) {
+          FIRDocumentSnapshot *snapshot = byPath[document.path];
+          HARD_ASSERT(snapshot != nil, "Document lookup did not return a requested document.");
+          [snapshots addObject:snapshot];
+        }
+        completion(snapshots, nil);
       });
 }
 
 - (FIRDocumentSnapshot *_Nullable)getDocument:(FIRDocumentReference *)document
                                         error:(NSError *__autoreleasing *)error {
-  [self validateReference:document];
+  return [self getDocuments:@[ document ] error:error].firstObject;
+}
+
+- (NSArray<FIRDocumentSnapshot *> *_Nullable)getDocuments:
+                                                 (NSArray<FIRDocumentReference *> *)documents
+                                                    error:(NSError *__autoreleasing *)error {
   dispatch_semaphore_t semaphore = dispatch_semaphore_create(0);
-  __block FIRDocumentSnapshot *result;
-  // We have to explicitly assign the innerError into a local to cause it to retain correctly.
+  __block NSArray<FIRDocumentSnapshot *> *result;
   __block NSError *outerError = nil;
-  [self getDocument:document
-         completion:^(FIRDocumentSnapshot *_Nullable snapshot, NSError *_Nullable innerError) {
-           result = snapshot;
-           outerError = innerError;
-           dispatch_semaphore_signal(semaphore);
-         }];
+  [self getDocuments:documents
+          completion:^(NSArray<FIRDocumentSnapshot *> *_Nullable snapshots,
+                       NSError *_Nullable innerError) {
+            result = snapshots;
+            outerError = innerError;
+            dispatch_semaphore_signal(semaphore);
+          }];
   dispatch_semaphore_wait(semaphore, DISPATCH_TIME_FOREVER);
   if (error) {
     *error = outerError;

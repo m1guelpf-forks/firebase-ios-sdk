@@ -373,6 +373,8 @@ using firebase::firestore::testutil::OptionsForUnitTesting;
   [db1
       runTransactionWithBlock:^id(FIRTransaction *txn, NSError **) {
         FSTAssertThrows([txn getDocument:badRef error:nil], reason);
+        FIRDocumentReference *validRef = [db1 documentWithPath:@"foo/bar"];
+        FSTAssertThrows([txn getDocuments:@[ validRef, badRef ] error:nil], reason);
         FSTAssertThrows([txn setData:data forDocument:badRef], reason);
         FSTAssertThrows([txn setData:data forDocument:badRef merge:YES], reason);
         FSTAssertThrows([txn updateData:data forDocument:badRef], reason);
